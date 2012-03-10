@@ -1,0 +1,5 @@
+
+Outputs hostname and IPs of nodes in a PL slice using PLCAPI.
+
+To get started:
+ > plc_slice_nodes.py -h
