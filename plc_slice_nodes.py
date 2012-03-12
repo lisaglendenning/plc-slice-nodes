@@ -9,6 +9,8 @@ import sys, optparse, getpass, socket, threading, Queue
 
 import PLC.Shell
 
+import resolve
+
 ##############################################################################
 ##############################################################################
 
@@ -20,11 +22,6 @@ Required argument USER: PLC user or file containing PLC user.
 Prompts for the password if not given on the command line.
 Will choose some slice if no slice is specified.
 """
-
-OUTPUT_SEP = ' '
-OUTPUT_ENDL = '\n'
-OUTPUT_COLUMNS = ['%(hostname)s', '%(ip)s']
-OUTPUT_RECORD = OUTPUT_SEP.join(OUTPUT_COLUMNS)
 
 ##############################################################################
 ##############################################################################
@@ -77,47 +74,10 @@ def fetch(shell, slice_name):
 ##############################################################################
 ##############################################################################
 
-def lookup(hostname):
-    """Returns list of IPs for a hostname."""
-    try:
-        result = socket.getaddrinfo(hostname, None)
-    except: # Unable to resolve
-        return ()
-    ips = [r[4][0] for r in result]
-    return ips
-
-##############################################################################
-##############################################################################
-
-class LookupThread(threading.Thread):
-    """Fetches hostnames from input Queue and writes (hostname, IPs) result to output Queue."""
-    
-    def __init__(self, input, output):
-        threading.Thread.__init__(self)
-        self.input = input
-        self.output = output
-
-    def run(self):
-        input = self.input
-        output = self.output
-        while not input.empty():
-            try:
-                hostname = input.get(True, 0.1)
-            except Empty:
-                break
-            else:
-                ips = lookup(hostname)
-                output.put((hostname, ips))
-                input.task_done()
-
-##############################################################################
-##############################################################################
-
-# TODO: some sort of timeout enforcement would be nice?
-def lookups(nodes, interfaces):
+def lookup(nodes, interfaces):
     # join nodes to interfaces
     node_to_ips = {}
-    missing = Queue.Queue()
+    missing = []
     for name, n in nodes.iteritems():
         ips = []
         for i in n['interface_ids']:
@@ -127,51 +87,19 @@ def lookups(nodes, interfaces):
         if ips:
             node_to_ips[name] = ips
         else:
-            missing.put(name)
+            missing.append(name)
             
     # if IP is not in PLCAPI, do the lookup ourselves
-    if not missing.empty():
-        pool_size = 16
-        results = Queue.Queue()
-        for i in xrange(pool_size):
-            t = LookupThread(missing, results)
-            t.start()
-        missing.join() # not until Python 2.5
-        
-        while not results.empty():
-            try:
-                name, ips = results.get_nowait()
-            except Empty:
-                break
-            else:
-                assert name not in node_to_ips
-                node_to_ips[name] = ips
+    if len(missing) > 0:
+        node_to_ips.update(resolve.resolve(missing))
     return node_to_ips
 
 ##############################################################################
 ##############################################################################
 
-def output(nodes, interfaces, filename=None):
-    """Writes node hostname and IPs to a file (or stdout)."""
-    # map nodes to IPs
-    node_to_ips = lookups(nodes, interfaces)
-    if filename is None:
-        file = sys.stdout
-    else:
-        file = open(filename, 'w')
-    names = nodes.keys()
-    names.sort()
-    for name in names:
-        ips = node_to_ips[name]
-        record = {'hostname' : name, 'ip': OUTPUT_SEP.join(ips) }
-        file.write(OUTPUT_RECORD % record)
-        file.write(OUTPUT_ENDL)
-    file.close()
-    
-##############################################################################
-##############################################################################
-
-def parse_options(argv):
+def parse_options(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
     parser = optparse.OptionParser(usage=USAGE, description=DESCRIPTION)
     parser.add_option("-u", "--url", help="PLCAPI URL (default: %s)" % PLCAPI_URL, 
                       default=PLCAPI_URL)
@@ -182,7 +110,7 @@ def parse_options(argv):
     parser.add_option("-o", "--output",
                       help="output file (default is stdout)")
         
-    opts, args = parser.parse_args()
+    opts, args = parser.parse_args(argv)
     if len(args) < 1:
         parser.error("Missing required argument (USER)")
     opts.user = args[0]
@@ -206,20 +134,17 @@ def parse_options(argv):
 ##############################################################################
 
 def main(argv=None):
-
-    if argv is None:
-        argv = sys.argv
     opts = parse_options(argv)
-    
     shell = connect(opts.user, opts.password, opts.url)
     nodes, interfaces = fetch(shell, opts.slice)
-    output(nodes, interfaces, opts.output)
+    nodes_to_ips = lookup(nodes, interfaces)
+    resolve.output(nodes_to_ips, opts.output)
     
 ##############################################################################
 ##############################################################################
 
 if __name__ == '__main__':
-    sys.exit(main(sys.argv))
+    sys.exit(main())
     
 ##############################################################################
 ##############################################################################
