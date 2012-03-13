@@ -29,7 +29,8 @@ def lookup(hostname):
     """Returns list of IPs for a hostname."""
     try:
         result = socket.getaddrinfo(hostname, None)
-    except: # Unable to resolve
+    except Exception, e: # Unable to resolve
+        sys.stderr.write("%s\n" % e)
         return ()
     ips = [r[4][0] for r in result]
     return ips
@@ -62,13 +63,13 @@ class LookupThread(threading.Thread):
 ##############################################################################
 
 # TODO: some sort of timeout enforcement would be nice?
-def resolve(hostnames):
+def resolve(hostnames, pool_size=POOL_SIZE):
     input = Queue.Queue()
     for i in hostnames:
         input.put_nowait(i)
     
     output = Queue.Queue()
-    for i in xrange(POOL_SIZE):
+    for i in xrange(pool_size):
         t = LookupThread(input, output)
         t.start()
     input.join() # needs Python 2.5
@@ -89,7 +90,7 @@ def input(filename=None):
     else:
         f = open(filename, 'r')
     for line in f:
-        columns = (line.rstrip(RECORD_END)).split(RECORD_SEP)
+        columns = (line.rstrip(RECORD_END)).split(COLUMN_SEP)
         hostnames.append(columns[0])
     f.close()
     return hostnames
@@ -122,6 +123,9 @@ def parse_options(argv=None, values=None):
                       help="input file (default is stdin)")
     parser.add_option("-o", "--output",
                       help="output file (default is stdout)")
+    parser.add_option("-p", "--pool",
+                      type=int, default=POOL_SIZE,
+                      help="pool size (default is %d)" % POOL_SIZE)
         
     opts, args = parser.parse_args(argv, values)
     return opts
@@ -132,7 +136,7 @@ def parse_options(argv=None, values=None):
 def main(argv=None):
     opts = parse_options(argv)
     hostnames = input(opts.input)
-    names_to_ips = resolve(hostnames)
+    names_to_ips = resolve(hostnames, opts.pool)
     output(names_to_ips, opts.output)
     
 ##############################################################################
